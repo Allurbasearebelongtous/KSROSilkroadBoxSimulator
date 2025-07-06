@@ -1,84 +1,100 @@
-import pandas as pd
-import numpy as np
-from collections import Counter, defaultdict
-import re
-import sys
+import tkinter as tk
+from tkinter import scrolledtext, messagebox
+import csv
+import random
 
-# Logger that writes to both console and file
-class DualLogger:
-    def __init__(self, filename):
-        self.console = sys.stdout
-        self.file = open(filename, 'w', encoding='utf-8')
+CSV_FILE = 'silkroadBoxDropRates.csv'
+OUTPUT_FILE = 'silkroadBoxSimulator_outcome.txt'
 
-    def write(self, message):
-        self.console.write(message)
-        self.file.write(message)
+def simulate_drops():
+    try:
+        num_boxes = int(entry.get())
+        if num_boxes <= 0:
+            raise ValueError
+    except ValueError:
+        messagebox.showerror("Invalid Input", "Please enter a positive integer for number of boxes.")
+        return
 
-    def flush(self):
-        self.console.flush()
-        self.file.flush()
+    items = []
+    probabilities = []
+    drop_rate_map = {}
 
-def load_drop_data():
-    df = pd.read_csv("silkroadBoxDropRates.csv")
-    df['Drop Rate'] = df['Drop Rate'].str.replace('%', '').astype(float)
-    df['Probability'] = df['Drop Rate'] / df['Drop Rate'].sum()
-    df['Full Item'] = df['Item Name (Korean)'] + f" x" + df['Qty'].astype(str)
-    return df
+    # Load drop rates from CSV and build item list + drop rate map
+    with open(CSV_FILE, newline='', encoding='utf-8') as csvfile:
+        reader = csv.DictReader(csvfile)
+        for row in reader:
+            item = row['Item'].strip().replace("Secret Flame", "Secret Key")
+            drop_rate_percent = float(row['Drop Rate'].strip('%'))
+            quantity = int(row['Quantity'])
+            items.append((item, quantity))
+            probabilities.append(drop_rate_percent / 100)
+            drop_rate_map[item] = drop_rate_percent
 
-def simulate_box_opening(df, num_boxes):
-    print(f"\nOpening {num_boxes} boxes...\n")
+    results = []
+    detailed_drops = []
+    for _ in range(num_boxes):
+        selected = random.choices(items, weights=probabilities, k=1)[0]
+        results.append(selected)
+        detailed_drops.append(f"Box: {selected[0]} x{selected[1]}")
 
-    items = df['Full Item']
-    probabilities = df['Probability']
+    summary = {}
+    grouped = {}
+    for item, qty in results:
+        summary[(item, qty)] = summary.get((item, qty), 0) + 1
+        grouped[item] = grouped.get(item, 0) + qty
 
-    drops = np.random.choice(items, size=num_boxes, p=probabilities)
-
-    for i, item in enumerate(drops, 1):
-        print(f"Box {i}: {item}")
-
-    drop_counts = Counter(drops)
-
-    print("\n=== Drop Summary ===")
-    for item, count in drop_counts.items():
-        rate = (count / num_boxes) * 100
-        print(f"{item}: {count} times ({rate:.2f}%)")
-
-    # Group by base item
-    grouped_totals = defaultdict(int)
-    base_drop_rates = defaultdict(list)
-    quantity_pattern = re.compile(r"(.+?) x(\d+)$")
-
-    for _, row in df.iterrows():
-        match = quantity_pattern.match(row['Full Item'])
-        if match:
-            base_name, _ = match.groups()
-            base_drop_rates[base_name].append(row['Drop Rate'])
-
-    for full_item, count in drop_counts.items():
-        match = quantity_pattern.match(full_item)
-        if match:
-            base_name, qty = match.groups()
-            grouped_totals[base_name] += int(qty) * count
-
-    # Manual exclusions
-    special_items = ['Secret Key', 'Element of Destruction']
-
-    # Sort regular items by lowest drop rate
-    sorted_items = sorted(
-        [(item, qty) for item, qty in grouped_totals.items() if item not in special_items],
-        key=lambda x: min(base_drop_rates[x[0]])
+    # Summary (Item + Qty) sorted by drop count and keep special items last
+    sorted_summary = sorted(
+        [(item, qty, count) for (item, qty), count in summary.items() if count > 0],
+        key=lambda x: (x[0] in ['Secret Key', 'Element of Destruction'], x[2] * x[1])
     )
 
-    # Add special items at the end
-    for item in special_items:
-        if item in grouped_totals:
-            sorted_items.append((item, grouped_totals[item]))
+    # Grouped Totals sorted by CSV drop rate (ascending), special items last
+    special_items = ['Secret Key', 'Element of Destruction']
+    sorted_grouped = sorted(
+        grouped.items(),
+        key=lambda x: (x[0] in special_items, drop_rate_map.get(x[0], float('inf')))
+    )
 
-    print("\n=== Grouped Total Quantities Obtained (Sorted by Drop Rate) ===")
-    for base_item, total_qty in sorted_items:
-        print(f"{base_item}: {total_qty}")
+    output_lines = [f"Opening {num_boxes} boxes...", ""]
+    output_lines.extend(detailed_drops)
 
-if __name__ == "__main__":
-    sys.stdout = DualLogger("silkroadBoxSimulator_outcome.txt")
-    df = load_drop_data()
-    simulate_box_opening(df, 1000)
+    output_lines.append("\nSummary (Grouped by Item and Quantity):")
+    for item, qty, count in sorted_summary:
+        percent = (count / num_boxes) * 100
+        output_lines.append(f"{item} x{qty}: {count} times ({percent:.2f}%)")
+
+    output_lines.append("\nTotal Quantities Obtained (Grouped by Item):")
+    for item, total_qty in sorted_grouped:
+        output_lines.append(f"{item}: {total_qty}")
+
+    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+        for line in output_lines:
+            f.write(line + "\n")
+
+    text_area.delete(1.0, tk.END)
+    for line in output_lines:
+        text_area.insert(tk.END, line + "\n")
+
+# --- GUI Setup ---
+
+root = tk.Tk()
+root.title("Silkroad Box Simulator")
+
+frame = tk.Frame(root)
+frame.pack(padx=10, pady=10)
+
+entry_label = tk.Label(frame, text="Number of Boxes:")
+entry_label.grid(row=0, column=0, padx=5, pady=5)
+
+entry = tk.Entry(frame, width=10)
+entry.grid(row=0, column=1, padx=5, pady=5)
+entry.insert(0, "50")
+
+btn = tk.Button(frame, text="Open Boxes", command=simulate_drops)
+btn.grid(row=0, column=2, padx=10)
+
+text_area = scrolledtext.ScrolledText(root, width=80, height=30, wrap=tk.WORD)
+text_area.pack(padx=10, pady=10)
+
+root.mainloop()
